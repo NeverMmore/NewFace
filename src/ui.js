@@ -1,9 +1,9 @@
 // 主对话框
 
 import {
-    DEFAULT_NSFW_FEMALE, DEFAULT_NSFW_MALE, DEFAULT_SFW_FIELDS, DEFAULT_SYSTEM, TEMPLATE_VERSION,
+    DEFAULT_NSFW_FEMALE, DEFAULT_NSFW_MALE, DEFAULT_SFW_FIELDS, DEFAULT_SYSTEM, migrateTemplates,
     buildNsfwPrompt, extractTagged, genderOf, mergeProfile, normalizeNsfw, buildRepairPrompt, buildSfwPrompt, checkOutput, formatNameList, guessKind,
-    hasViolation, joinWorld, maskNames, namesOfEntry, parseNameList, parseNewName, shortBio, violationText,
+    hasViolation, joinWorld, maskNames, namesOfEntry, parseNameList, parseNewName, shortBio, topLevelKeys, violationText,
 } from './core.js';
 import {
     addWorldEntry, allWorldNames, boundWorldNames, callLLM, cardText, connectionProfiles, createCharacterCard,
@@ -209,12 +209,19 @@ function nsfwTemplate(sfw) {
     return g === 'male' ? state.s.nsfwMale : state.s.nsfwFemale;
 }
 
+/** 规整 NSFW 输出用的参数：基础资料的顶层字段（识别重复抄写）、当前模板（识别段落）、漏写标题时补的标题 */
+function nsfwOptions(sfw) {
+    const tpl = nsfwTemplate(sfw);
+    const header = tpl.trim().split('\n')[0].replace(/[:：].*$/, '').trim();
+    return { stopKeys: topLevelKeys(sfw), templates: [tpl], header };
+}
+
 async function genNsfwInner(m = material()) {
     const sfw = $('#nf-sfw').value.trim();
     if (!sfw) throw new Error('请先生成（或填写）SFW 基础资料');
     const prompt = buildNsfwPrompt({ ...m, sfw, fields: nsfwTemplate(sfw) });
     const { text, check } = await runChecked('nsfw', prompt, m);
-    state.nsfw = normalizeNsfw(text);
+    state.nsfw = normalizeNsfw(text, 2, nsfwOptions(sfw));
     $('#nf-nsfw').value = state.nsfw;
     showCheck('nsfw', check);
 }
@@ -247,7 +254,7 @@ function fixNow(kind) {
         }
         setStatus(kind, '修正中…', 'busy');
         const text = await callLLM({ system: state.s.system, prompt: buildRepairPrompt(box.value, check), settings: state.s, signal: state.busy.signal });
-        box.value = kind === 'nsfw' ? normalizeNsfw(text) : extractTagged(text);
+        box.value = kind === 'nsfw' ? normalizeNsfw(text, 2, nsfwOptions($('#nf-sfw').value)) : extractTagged(text);
         const again = checkOutput(text, m.forbidden, m.identities);
         if (kind === 'nsfw') again.nameClash = '';
         showCheck(kind, again);
@@ -262,7 +269,7 @@ function setStatus(kind, text, cls) {
 
 /** 完整资料：NSFW 块插在外貌特征后面，整份用 <姓名> 标签包裹 */
 function fullText() {
-    return mergeProfile($('#nf-sfw').value, $('#nf-nsfw').value);
+    return mergeProfile($('#nf-sfw').value, $('#nf-nsfw').value, { templates: [state.s.nsfwFemale, state.s.nsfwMale] });
 }
 
 function newName() {
@@ -561,18 +568,16 @@ function onKey(e) {
     if (e.key === 'Escape' && state.root && !document.querySelector('.popup:not([closing])')) close();
 }
 
-/** 旧版本保存的模板结构不同，换成新的默认模板 */
+/** 旧版本保存的模板升级到当前版本；用户改过的 NSFW 模板不动，提示一次 */
 function migrate(s) {
-    if ((s.templateVersion || 1) >= TEMPLATE_VERSION) return;
-    // 旧模板留一份备份（扩展设置里的 newface.templateBackupV1），万一用户改过还能找回
-    if (s.sfwFields || s.nsfwFields) s.templateBackupV1 = { sfwFields: s.sfwFields, nsfwFields: s.nsfwFields };
-    if (s.maxTokens === 4096) s.maxTokens = DEFAULTS.maxTokens; // 新格式资料更长，旧默认值容易截断
-    s.sfwFields = DEFAULT_SFW_FIELDS;
-    s.nsfwFemale = DEFAULT_NSFW_FEMALE;
-    s.nsfwMale = DEFAULT_NSFW_MALE;
-    delete s.nsfwFields;
-    s.templateVersion = TEMPLATE_VERSION;
+    const { changed, fromVersion, kept } = migrateTemplates(s);
+    if (!changed) return;
+    if (fromVersion < 2 && s.maxTokens === 4096) s.maxTokens = DEFAULTS.maxTokens; // 新格式资料更长，旧默认值容易截断
     saveSettings();
+    if (kept.length) {
+        const which = kept.map((k) => (k === 'nsfwMale' ? '男性' : '女性')).join('、');
+        toast('info', `NSFW 模板新增了「性经验与偏好」「亲密时的反差」「发展亲密关系的契机」。你改过${which} NSFW 模板，所以没有自动替换。可以在设置里照着默认模板把新字段加进去；或者点「恢复默认模板与提示词」（注意：这会同时恢复 SFW 模板和系统提示词）。`);
+    }
 }
 
 export async function open() {

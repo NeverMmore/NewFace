@@ -121,12 +121,47 @@ const PLACEHOLDER_NAME = /^(?:角色姓名|角色名|新角色姓名|新角色|�
 const OPEN_TAG_LINE = /^[ \t]*<([^/<>\n]{1,30})>[ \t]*$/;
 const CLOSE_TAG_LINE = /^[ \t]*<\/([^<>\n]{1,30})>[ \t]*$/;
 const TAG_LINE = /^\s*<\/?[^<>\n]{1,30}>\s*$/;
-/** 一级大标题（独占一行）：NSFW 块里出现这些说明 AI 把后面的基础资料又抄了一遍 */
-const SECTION_LINE = /^\s*(?:基本信息|外貌特征|背景设定|关系设定|性格架构|二次解释)\s*[:：]\s*$/;
-const NSFW_HEADER = /^[ \t#*>-]*(?:[男女]性)?NSFW设定[ \t*]*[:：][ \t]*$/;
-const NSFW_HEADER_LOOSE = /NSFW设定[ \t*]*[:：]/;
+/** 基础资料的大标题（可带 markdown、编号、限定语、值）：NSFW 块里出现说明 AI 又抄了一遍基础资料，或者自己加了一段「二次解释」 */
+const SECTION_LINE = /^[ \t#*>•-]*(?:\d+[.、)]\s*)?[*【[]*(?:NSFW\s*)?(?:基本信息|外貌特征|背景设定|关系设定|性格架构|二次解释)/i;
+/** NSFW 标题行：可带 markdown / 括号 / 空格（「女性 NSFW 设定」），冒号可有可无，冒号后可带值 */
+const NSFW_HEADER = /^[ \t#*>【[（(]*(?:[男女]性\s*)?NSFW\s*设定[ \t*】\]）)]*(?:[:：].*)?$/i;
+/** 字段行：短标签 + 冒号（标签前可带 markdown、列表符号、编号） */
+const KEY_LINE = /^[ \t#*>•-]*(?:\d+[.、)]\s*)?\**[^\s:：，。！？,.!?*#>][^:：，。！？,.!?\n]{0,23}?\**[ \t]*[:：]/;
+const LIST_ITEM = /^\s*(?:[-*•]|\d+[.、)])(?:\s|$)/;
+/** 分隔线 --- / *** / * * * / ___ */
+const RULE_LINE = /^\s*(?:[-*_—]\s*){3,}$/;
+/** 明确的备注 / 免责声明（不管在哪一行出现都算块结束） */
+const NOTE_LINE = /^[ \t#*>•（(【[-]*(?:注|备注|注意|说明|提示|补充|声明|免责声明|ps|p\.s\.?|note|notes)[ \t*]*[:：]|所有角色|角色均|以上内容|本设定|纯属虚构|仅供参考|all characters|fictional/i;
+/** 块后面的客套话开头 */
+const CHATTER_START = /^[ \t#*>•（(【[-]*(?:以上|希望|如需|如果需要|如有需要|需要调整|祝|enjoy|hope)/i;
+/** 看起来是 AI 附加说明的段落标题 */
+const APPENDIX_LABEL = /说明|思路|原因|设计|备注|注释|解析|总结|分析|以下|以上|完整|合并|补充|提示|note|design|summary|explanation/i;
 
 const indentOf = (l) => l.match(/^ */)[0].length;
+/** 行首的制表符换成空格（一个制表符算一级缩进，即 2 格，和模板一致） */
+const expandTabs = (l) => l.replace(/^[ \t]+/, (ws) => ws.replace(/\t/g, '  '));
+/** 字段行的标签（去掉 markdown、列表符号、编号和冒号后面的部分） */
+const labelOf = (l) => l.trim()
+    .replace(/^[#*>•\-\s]+/, '')
+    .replace(/^\d+[.、)]\s*/, '')
+    .replace(/^\*+/, '')
+    .replace(/[ \t*]*[:：][\s\S]*$/, '')
+    .replace(/\*+$/, '')
+    .trim();
+/** 字段行冒号后面的值（去掉 markdown 收尾） */
+const valueOf = (l) => {
+    const m = l.match(/[:：]([\s\S]*)$/);
+    return m ? m[1].replace(/^[ \t*]+|[ \t*]+$/g, '') : '';
+};
+const NSFW_LABEL = (l) => labelOf(l).replace(/[【】[\]（）()]/g, '').replace(/\s+/g, '');
+
+/** 资料的顶层字段名（如 基本信息 / 外貌特征 / 用户自定义的大标题），合并时用来识别 NSFW 块里重复抄写的基础资料 */
+export function topLevelKeys(text) {
+    const lines = extractTagged(text).split('\n').filter((l) => l.trim() && !TAG_LINE.test(l));
+    if (!lines.length) return [];
+    const top = Math.min(...lines.map(indentOf));
+    return [...new Set(lines.filter((l) => indentOf(l) === top && /[:：]/.test(l)).map(labelOf).filter(Boolean))];
+}
 
 /** 「姓名:」字段的值（分隔符不跨行，字段为空时返回空串） */
 function fieldName(text) {
@@ -187,38 +222,157 @@ export function reindent(text, target) {
 }
 
 /**
- * 规整 NSFW 块：从「…NSFW设定:」那一行开始，到它的子项结束为止（去掉前后的闲话、包裹标签、重复抄写的基础资料）；
- * 标题行缩进 base 格，子项整体缩进 base+2 格。
- * 标题行和子项分开定缩进：酒馆返回的文字可能被 trim 掉了第一行的缩进，不能拿整段的最小缩进来算。
+ * 从 NSFW 模板里读出结构：sections = 段落标题（身体细节 / 性经验与偏好 …），fields = 模板里出现过的所有字段名
+ * @param {string[]} templates
  */
-export function normalizeNsfw(text, base = 2) {
-    const lines = cleanOutput(text).split('\n').filter((l) => !TAG_LINE.test(l));
-    let start = lines.findIndex((l) => NSFW_HEADER.test(l));
-    if (start < 0) start = lines.findIndex((l) => NSFW_HEADER_LOOSE.test(l));
-    if (start < 0) return reindent(trimBlankLines(lines.join('\n')), base);
-    const h = indentOf(lines[start]);
-    const body = [];
-    let deeper = false;
-    for (const l of lines.slice(start + 1)) {
-        if (l.trim()) {
-            const ind = indentOf(l);
-            // 回到与标题同级或更浅（且前面已经有过子项）、或者出现基础资料的大标题，就是块结束了
-            if (SECTION_LINE.test(l) || (deeper && ind <= h)) break;
-            if (ind > h) deeper = true;
+export function nsfwStructure(templates = [DEFAULT_NSFW_FEMALE, DEFAULT_NSFW_MALE]) {
+    const sections = new Set();
+    const fields = new Set();
+    for (const t of templates) {
+        const ls = String(t || '').split('\n').map(expandTabs).filter((l) => l.trim());
+        const hi = ls.findIndex((l) => NSFW_HEADER.test(l));
+        if (hi < 0) continue;
+        const h = indentOf(ls[hi]);
+        const body = ls.slice(hi + 1).filter((l) => indentOf(l) > h && KEY_LINE.test(l) && !LIST_ITEM.test(l));
+        if (!body.length) continue;
+        const sec = Math.min(...body.map(indentOf));
+        for (const l of body) {
+            const lab = labelOf(l);
+            fields.add(lab);
+            if (indentOf(l) === sec) sections.add(lab);
         }
-        body.push(l);
     }
-    const head = ' '.repeat(base) + lines[start].replace(/^[ \t#*>-]+/, '').trim();
-    const rest = trimBlankLines(body.join('\n'));
-    return rest ? `${head}\n${reindent(rest, base + 2)}` : head;
+    return { sections, fields };
+}
+
+const DEFAULT_STRUCTURE = { sections: null, fields: null };
+
+/**
+ * 规整 NSFW 块，结果是：标题行（base 格）→ 段落标题（base+2）→ 段落内容（base+4，保留内容内部的相对层级）。
+ *
+ * 以模板为锚：模板里的段落标题（身体细节 / 性经验与偏好 …）无论写在哪一级缩进、带不带编号和 markdown，都当作段落开头；
+ * 不靠整段缩进推层级——酒馆可能 trim 掉标题行的缩进，AI 也可能把段落写成和标题同级，或者整块平铺。
+ * 块在这些地方结束：又一个 NSFW 标题（重复输出）、包裹标签、分隔线、基础资料的大标题（又抄了一遍）、
+ * 备注 / 免责声明、像附加说明的未知段落标题、空行后面的客套话。
+ *
+ * @param {string} text
+ * @param {number} base 标题行缩进
+ * @param {{stopKeys?:string[], templates?:string[], header?:string}|string[]} opts
+ *   stopKeys：基础资料的顶层字段名；templates：当前使用的 NSFW 模板（决定段落和字段）；header：AI 漏写标题时补的标题名
+ */
+export function normalizeNsfw(text, base = 2, opts = {}) {
+    if (Array.isArray(opts)) opts = { stopKeys: opts };
+    const { stopKeys = [], templates, header = '' } = opts;
+    let structure = DEFAULT_STRUCTURE;
+    if (templates) structure = nsfwStructure([...templates, DEFAULT_NSFW_FEMALE, DEFAULT_NSFW_MALE]);
+    else if (!DEFAULT_STRUCTURE.sections) Object.assign(DEFAULT_STRUCTURE, nsfwStructure());
+    const { sections, fields } = structure;
+    const stop = new Set(stopKeys);
+    const isKey = (l) => KEY_LINE.test(l);
+    const isSection = (l) => isKey(l) && sections.has(labelOf(l));
+
+    const lines = cleanOutput(text).split('\n').map(expandTabs);
+    // 找标题：连续几个标题行（中间只有空行，如「**女性NSFW设定**：」后面再接「女性NSFW设定:」）取最后一个
+    let start = lines.findIndex((l) => NSFW_HEADER.test(l));
+    if (start >= 0) {
+        for (let j = start + 1; j < lines.length; j++) {
+            if (!lines[j].trim()) continue;
+            if (NSFW_HEADER.test(lines[j]) && !valueOf(lines[start])) start = j;
+            else break;
+        }
+    }
+    let headLabel;
+    let headValue = '';
+    let body;
+    let h;
+    if (start >= 0) {
+        headLabel = NSFW_LABEL(lines[start]);
+        headValue = valueOf(lines[start]);
+        h = indentOf(lines[start]);
+        body = lines.slice(start + 1);
+    } else {
+        // AI 漏写了标题：从第一个段落标题开始，补上标题
+        const first = lines.findIndex(isSection);
+        if (first < 0 || !header) return reindent(trimBlankLines(lines.filter((l) => !TAG_LINE.test(l)).join('\n')), base);
+        headLabel = header;
+        h = -1;
+        body = lines.slice(first);
+    }
+
+    const pre = []; // 第一个段落标题之前的内容（AI 没写段落标题、直接写字段时）
+    const secs = []; // {key, value, indent, lines}
+    let nested = false; // 是否有正常的层级（内容比段落标题深）
+    const sectionIndent = () => (secs.length ? secs[secs.length - 1].indent : h + 2);
+    const nextNonBlank = (i) => body.slice(i + 1).find((x) => x.trim()) || '';
+    const isStopLine = (l) => NSFW_HEADER.test(l) || OPEN_TAG_LINE.test(l) || RULE_LINE.test(l) || SECTION_LINE.test(l) || NOTE_LINE.test(l);
+
+    for (let i = 0; i < body.length; i++) {
+        const l = body[i];
+        const cur = secs[secs.length - 1];
+        const target = cur ? cur.lines : pre;
+        if (!l.trim()) {
+            target.push(l);
+            continue;
+        }
+        if (CLOSE_TAG_LINE.test(l)) continue;
+        // 标题下面、还没有任何内容时的免责声明 / 分隔线（「（以下设定中角色均已成年）」）：跳过；有内容之后再出现就是块结束
+        if (!cur && !pre.some((x) => x.trim()) && (NOTE_LINE.test(l) || RULE_LINE.test(l))) continue;
+        if (isStopLine(l)) break;
+        const ind = indentOf(l);
+        const lab = isKey(l) ? labelOf(l) : '';
+        if (lab && sections.has(lab)) {
+            secs.push({ key: lab, value: valueOf(l), indent: ind, lines: [] });
+            continue;
+        }
+        if (lab && stop.has(lab) && !fields.has(lab)) break; // 基础资料里的自定义大标题：又抄了一遍
+        const prev = [...target].reverse().find((x) => x.trim());
+        const prevBlank = target.length > 0 && !target[target.length - 1].trim();
+        // 比标题还浅（或同级）的非段落行：只在有层级的写法里才能判断，平铺写法里它们就是内容
+        if (h >= 0 && ind <= h && h < sectionIndent() && !LIST_ITEM.test(l)) break;
+        if (!cur) {
+            // 段落标题之前：字段和列表留下，散文（多半是「（以下角色均已成年）」之类）丢掉
+            if (lab || LIST_ITEM.test(l)) pre.push(l);
+            continue;
+        }
+        const shallow = ind <= cur.indent;
+        if (shallow && lab && !fields.has(lab)) {
+            // 段落这一级出现模板里没有的标题：像附加说明、后面紧跟停止行、或有层级时隔着空行出现，都算块结束
+            const next = nextNonBlank(i);
+            if (/[*#]/.test(l.trim()[0]) || /\*\*/.test(l) || APPENDIX_LABEL.test(lab) || !next || isStopLine(next) || (prevBlank && nested)) break;
+        }
+        if (shallow && !lab && !LIST_ITEM.test(l)) {
+            // 段落这一级的散文：空行后面的是客套话；紧跟在列表后面、像客套话开头的也是
+            if (prevBlank || (prev && LIST_ITEM.test(prev) && CHATTER_START.test(l))) break;
+        }
+        if (LIST_ITEM.test(l) && prevBlank) {
+            // 空行后面、比这一段已有列表项更浅的列表项：多半是块后面的附注
+            const items = cur.lines.filter((x) => x.trim() && LIST_ITEM.test(x));
+            if (items.length && ind < Math.min(...items.map(indentOf))) break;
+        }
+        if (ind > cur.indent) nested = true;
+        cur.lines.push(l);
+    }
+
+    const pad = (n) => ' '.repeat(n);
+    const out = [`${pad(base)}${headLabel}:${headValue ? ` ${headValue}` : ''}`];
+    const preText = trimBlankLines(pre.join('\n'));
+    if (preText) out.push(reindent(preText, base + 2));
+    for (const s of secs) {
+        out.push(`${pad(base + 2)}${s.key}:${s.value ? ` ${s.value}` : ''}`);
+        const content = trimBlankLines(s.lines.join('\n'));
+        if (content) out.push(reindent(content, base + 4));
+    }
+    return out.join('\n');
 }
 
 /**
  * 合并 SFW 与 NSFW：NSFW 块插在「背景设定:」前面（即外貌特征之后），与其他大标题同级；整份资料用 <姓名> 标签包裹
+ * @param {{templates?:string[]}} opts templates：当前使用的 NSFW 模板（用户可能自定义了段落）
  */
-export function mergeProfile(sfw, nsfw) {
+export function mergeProfile(sfw, nsfw, opts = {}) {
     let s = extractTagged(sfw);
-    if (!s) return nsfw ? normalizeNsfw(nsfw) : '';
+    const header = (g) => (g === 'male' ? '男性NSFW设定' : g === 'female' ? '女性NSFW设定' : 'NSFW设定');
+    if (!s) return nsfw ? normalizeNsfw(nsfw, 2, { templates: opts.templates, header: header('') }) : '';
     const name = parseNewName(s) || '新角色';
     let lines = s.split('\n');
     const open = lines[0].match(OPEN_TAG_LINE);
@@ -239,7 +393,8 @@ export function mergeProfile(sfw, nsfw) {
     if (at < 0) at = lines.length - 1; // 没有背景设定就插在结束标签前
     const before = lines.slice(0, at);
     while (before.length > 1 && !before[before.length - 1].trim()) before.pop();
-    return [...before, '', normalizeNsfw(n0, base), '', ...lines.slice(at)].join('\n');
+    const block = normalizeNsfw(n0, base, { stopKeys: topLevelKeys(s), templates: opts.templates, header: header(genderOf(s)) });
+    return [...before, '', block, '', ...lines.slice(at)].join('\n');
 }
 
 /**
@@ -293,8 +448,47 @@ export function violationText(check) {
 
 // ---------------- 提示词 ----------------
 
-/** 模板版本：模板结构改动时 +1，旧版本保存的模板会被换成新默认值 */
-export const TEMPLATE_VERSION = 2;
+/** 模板版本：模板结构改动时 +1，见 migrateTemplates */
+export const TEMPLATE_VERSION = 3;
+
+/** 短指纹，用来判断用户有没有改过旧版默认模板（不用把旧模板全文留在代码里） */
+export function textHash(s) {
+    let x = 5381;
+    for (const c of String(s)) x = ((x * 33) ^ c.codePointAt(0)) >>> 0;
+    return x.toString(36);
+}
+
+/** v0.2.0（模板版本 2）默认 NSFW 模板的指纹 */
+const V2_NSFW_HASH = { nsfwFemale: 'mrwjzd', nsfwMale: 'ah8ihm' };
+
+/**
+ * 把旧版本保存的模板升级到当前版本（直接修改 s）
+ * - 版本 1（v0.1.0）：模板结构完全不同，全部换成新默认值，旧模板备份到 templateBackupV1
+ * - 版本 2（v0.2.0）：NSFW 模板加回性经验等字段；用户没改过的直接换，改过的保留不动
+ * @returns {{changed:boolean, fromVersion:number, kept:string[]}} kept：因为用户改过而没替换的模板键名
+ */
+export function migrateTemplates(s) {
+    const from = Number(s.templateVersion) || 1;
+    const kept = [];
+    if (from >= TEMPLATE_VERSION) return { changed: false, fromVersion: from, kept };
+    const defaults = { nsfwFemale: DEFAULT_NSFW_FEMALE, nsfwMale: DEFAULT_NSFW_MALE };
+    if (from < 2) {
+        // 新安装时 sfwFields 已经是默认值、也没有 nsfwFields，不用备份
+        if (s.nsfwFields !== undefined || (s.sfwFields && s.sfwFields !== DEFAULT_SFW_FIELDS)) {
+            s.templateBackupV1 = { sfwFields: s.sfwFields, nsfwFields: s.nsfwFields };
+        }
+        s.sfwFields = DEFAULT_SFW_FIELDS;
+        delete s.nsfwFields;
+        Object.assign(s, defaults);
+    } else {
+        for (const [k, v] of Object.entries(defaults)) {
+            if (s[k] === undefined || textHash(s[k]) === V2_NSFW_HASH[k]) s[k] = v;
+            else if (s[k] !== v) kept.push(k);
+        }
+    }
+    s.templateVersion = TEMPLATE_VERSION;
+    return { changed: true, fromVersion: from, kept };
+}
 
 // 模板里：（…）是填写说明，输出时删掉；<…> 是要换成实际内容的小标题
 export const DEFAULT_SFW_FIELDS = `<角色姓名>
@@ -381,7 +575,22 @@ export const DEFAULT_NSFW_FEMALE = `  女性NSFW设定:
         屁眼: （颜色，以及内部构造与触感的独特之处）
       屁股:
         形状:
-        大小: （包括走动、受压时的样子）`;
+        大小: （包括走动、受压时的样子）
+    性经验与偏好:
+      性取向:
+      性经验: （有没有过、和什么样的人、留下了什么印象；要与背景经历对得上）
+      性观念: （怎么看待性，和日常人设是一致还是反差）
+      敏感带: （具体部位，以及被碰到时身体和表情的反应）
+      性癖: （具体的偏好，要能从性格和经历里找到来由）
+      雷区与底线: （绝对不接受的事，碰到时会怎么反应）
+      自慰习惯: （频率、方式、会想着什么）
+      性幻想:
+    亲密时的反差:
+      - （亲密时与日常性格不一样的地方，写具体的语气、动作、表情）
+      -
+    发展亲密关系的契机:
+      - （在什么情境下、因为{{user}}做了什么，才可能和{{user}}走到这一步）
+      - `;
 
 export const DEFAULT_NSFW_MALE = `  男性NSFW设定:
     身体细节:
@@ -395,7 +604,22 @@ export const DEFAULT_NSFW_MALE = `  男性NSFW设定:
         屁眼: （颜色，以及内部构造与触感的独特之处）
       屁股:
         形状:
-        大小:`;
+        大小:
+    性经验与偏好:
+      性取向:
+      性经验: （有没有过、和什么样的人、留下了什么印象；要与背景经历对得上）
+      性观念: （怎么看待性，和日常人设是一致还是反差）
+      敏感带: （具体部位，以及被碰到时身体和表情的反应）
+      性癖: （具体的偏好，要能从性格和经历里找到来由）
+      雷区与底线: （绝对不接受的事，碰到时会怎么反应）
+      自慰习惯: （频率、方式、会想着什么）
+      性幻想:
+    亲密时的反差:
+      - （亲密时与日常性格不一样的地方，写具体的语气、动作、表情）
+      -
+    发展亲密关系的契机:
+      - （在什么情境下、因为{{user}}做了什么，才可能和{{user}}走到这一步）
+      - `;
 
 export const DEFAULT_SYSTEM = `你是一名专业的角色设定作者，负责在一个已有的世界观里创造【全新的原创角色】。
 
@@ -454,14 +678,16 @@ export function buildNsfwPrompt(p) {
     if (p.allowed.length) parts.push(`# 允许提及的已有人物\n\n${p.allowed.map((a) => `- ${a.names.join(' / ')}`).join('\n')}`);
     parts.push(`# 这个新角色的基础资料（已确定，以此为准）\n\n${p.sfw}`);
     if (p.request) parts.push(`# 用户的额外要求\n\n${p.request}`);
+    // 用户自己改过的旧模板里可能没有这些字段，提示词不能要求模板里没有的东西
+    const personal = /性经验|性观念|性癖|反差/.test(p.fields);
     parts.push(`# 任务
 
-为上面这个新角色补写成人向（NSFW）身体设定。必须与基础资料里的年龄、外貌、罩杯/身材保持一致，不要改动已确定的设定。角色是成年人。
+为上面这个新角色补写成人向（NSFW）设定，只写下面模板里列出的字段。必须与基础资料保持一致：身体细节对上年龄、外貌、罩杯/身材${personal ? '；性经验、性观念、性癖、亲密时的反差这类内容要从角色的性格架构和背景经历里推出来' : ''}。不要改动已确定的设定。角色是成年人。
 
 只输出下面这一块，它会被插到基础资料的「外貌特征」后面：
-- YAML 风格，两个空格一级缩进，从「NSFW设定:」那一行开始写；不要重复基础资料，不要用 <姓名> 标签包裹，不要用代码块。
-- （…）里是填写说明，输出时删掉。
-- 写法：具体、直白、有个人特色，每个部位都要有让人记住的独特之处。
+- YAML 风格，两个空格一级缩进，从「NSFW设定:」那一行开始写；不要重复基础资料，不要用 <姓名> 标签包裹，不要用代码块，最后不要加备注或说明。
+- （…）里是填写说明，输出时删掉；列表条数可以按需增减。
+- 写法：具体、直白、有个人特色。每个部位都要有让人记住的独特之处${personal ? '；性癖和反差要贴合这个人，不要写成谁都能用的套路' : ''}。
 
 ${p.fields}`);
     return parts.join('\n\n---\n\n');

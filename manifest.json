@@ -4,7 +4,7 @@
     "js": "index.js",
     "css": "style.css",
     "author": "David",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "homePage": "https://github.com/NeverMmore/NewFace",
     "auto_update": false,
     "description": "根据当前角色卡绑定的世界书，生成全新原创角色的 SFW / NSFW 资料。世界书里已有的人物只作为禁用名单发送，生成后自动检查并修正，解决 AI 总是拿世界书里未出场人物来充数的问题。"

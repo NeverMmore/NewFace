@@ -1,0 +1,101 @@
+{
+  "sfw": "<沈青禾>\n  基本信息:\n    姓名: 沈青禾\n    年龄: 24岁\n    性别: 女\n\n  外貌特征:\n    身高: 165cm\n\n  背景设定:\n    出身经历:\n      - 十岁拜师\n</沈青禾>",
+  "cases": [
+    {
+      "lens": "content-loss",
+      "why": "This is the same layout as the passing 'stars' regression test: sections written at the header's level, with list items at the key's level. The only change is t",
+      "input": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n  亲密时的反差:\n  - 希望A\n  - 会哭\n  发展亲密关系的契机:\n  - 雨夜",
+      "expected": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    亲密时的反差:\n      - 希望A\n      - 会哭\n    发展亲密关系的契机:\n      - 雨夜"
+    },
+    {
+      "lens": "content-loss",
+      "why": "Fully flat output is a supported, tested shape. NOTE_LINE has a bare '注' alternative with no word boundary, so any flat line or '- ' item that starts with 注视 / ",
+      "input": "女性NSFW设定:\n身体细节:\n屁股: 圆\n性经验与偏好:\n敏感带: 耳后\n亲密时的反差:\n- 会哭\n- 注视A时会脸红\n发展亲密关系的契机:\n- 雨夜",
+      "expected": "  女性NSFW设定:\n    身体细节:\n      屁股: 圆\n    性经验与偏好:\n      敏感带: 耳后\n    亲密时的反差:\n      - 会哭\n      - 注视A时会脸红\n    发展亲密关系的契机:\n      - 雨夜"
+    },
+    {
+      "lens": "content-loss",
+      "why": "Models often turn the two list sections into one-line 'key: value' fields, and often write section keys at the header's level. Once a deeper line has been seen ",
+      "input": "女性NSFW设定:\n身体细节:\n  屁股: 圆\n亲密时的反差: 平时冷淡，亲密时会撒娇\n发展亲密关系的契机: 雨夜",
+      "expected": "  女性NSFW设定:\n    身体细节:\n      屁股: 圆\n    亲密时的反差: 平时冷淡，亲密时会撒娇\n    发展亲密关系的契机: 雨夜"
+    },
+    {
+      "lens": "content-loss",
+      "why": "This is the tested 'trimmed header + sibling sections' shape. The only change is that 亲密时的反差 is written as a prose sentence at the key's level instead of '- ' i",
+      "input": "女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n  亲密时的反差:\n  平时冷淡，亲密时会撒娇。\n  发展亲密关系的契机:\n  - 雨夜",
+      "expected": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    亲密时的反差:\n      平时冷淡，亲密时会撒娇。\n    发展亲密关系的契机:\n      - 雨夜"
+    },
+    {
+      "lens": "content-loss",
+      "why": "The model leaves out the 「女性NSFW设定:」 line and starts at the template's first child, '    身体细节:'. SillyTavern then trims the first line's indent. With no header,",
+      "input": "身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      性经验: 无\n      敏感带: 耳后\n    亲密时的反差:\n      - 会哭",
+      "expected": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      性经验: 无\n      敏感带: 耳后\n    亲密时的反差:\n      - 会哭"
+    },
+    {
+      "lens": "content-loss",
+      "why": "Models sometimes number the top-level sections. In the tested 'trimmed header + sibling sections' shape, '  2. 性经验与偏好:' fails BARE_KEY because the '.' after the",
+      "input": "女性NSFW设定:\n    1. 身体细节:\n      屁股:\n        形状: 圆\n  2. 性经验与偏好:\n    敏感带: 耳后\n  3. 亲密时的反差:\n    - 会哭",
+      "expected": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后\n    亲密时的反差:\n      - 会哭"
+    },
+    {
+      "lens": "content-loss",
+      "why": "The model swaps the template's '  女性NSFW设定:' line for a markdown heading with no colon, but keeps the template's 4-space body indent. Neither NSFW_HEADER nor NS",
+      "input": "## 女性NSFW设定\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后",
+      "expected": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后"
+    },
+    {
+      "lens": "content-loss",
+      "why": "Because the system prompt stresses that characters are adults, models often add a parenthetical disclaimer right under the header. That line becomes 'first', so",
+      "input": "  女性NSFW设定:\n  （以下设定中角色均已成年）\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后",
+      "expected": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后"
+    },
+    {
+      "lens": "contamination",
+      "why": "Chinese markdown-style output very often bolds labels with the colon outside the bold (the repo's own tests use '**姓名**：'). A model that puts a bold section tit",
+      "input": "**女性NSFW设定**：\n\n  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后\n    亲密时的反差:\n      - A\n    发展亲密关系的契机:\n      - 雨夜\n      - A",
+      "expected": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后\n    亲密时的反差:\n      - A\n    发展亲密关系的契机:\n      - 雨夜\n      - A"
+    },
+    {
+      "lens": "contamination",
+      "why": "'* * *' is a standard markdown horizontal rule that models put before a closing remark. It also matches LIST_ITEM ('*' + space). The last template section (发展亲密",
+      "input": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后\n    亲密时的反差:\n      - A\n    发展亲密关系的契机:\n      - 雨夜\n      - A\n\n* * *\n\n希望你喜欢这个角色！",
+      "expected": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后\n    亲密时的反差:\n      - A\n    发展亲密关系的契机:\n      - 雨夜\n      - A"
+    },
+    {
+      "lens": "contamination",
+      "why": "Models sometimes emit the block twice, for example a regeneration or 'revised' copy, or after a repair prompt that asks for the full corrected output. The secon",
+      "input": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后\n    亲密时的反差:\n      - A\n    发展亲密关系的契机:\n      - 雨夜\n      - A\n\n  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后\n    亲密时的反差:\n      - A\n    发展亲密关系的契机:\n      - 雨夜\n      - A",
+      "expected": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后\n    亲密时的反差:\n      - A\n    发展亲密关系的契机:\n      - 雨夜\n      - A"
+    },
+    {
+      "lens": "contamination",
+      "why": "A model that re-emits the whole profile after the NSFW block usually introduces it with a lead-in sentence. The re-emitted SFW itself is cut correctly by SECTIO",
+      "input": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后\n    亲密时的反差:\n      - A\n    发展亲密关系的契机:\n      - 雨夜\n      - A\n\n以下是合并后的完整资料：\n\n<沈青禾>\n  基本信息:\n    姓名: 沈青禾\n  外貌特征:\n    身高: 165cm\n  背景设定:\n    出身经历:\n      - 十岁拜师\n</沈青禾>",
+      "expected": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后\n    亲密时的反差:\n      - A\n    发展亲密关系的契机:\n      - 雨夜\n      - A"
+    },
+    {
+      "lens": "contamination",
+      "why": "Models often append a bold 'design rationale' list despite the 'no notes' instruction. NOTE_LINE only matches keywords at the start of the line, so '设计说明' (说明 n",
+      "input": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后\n    亲密时的反差:\n      - A\n    发展亲密关系的契机:\n      - 雨夜\n      - A\n\n**设计说明：**\n- 反差来自A\n- B",
+      "expected": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后\n    亲密时的反差:\n      - A\n    发展亲密关系的契机:\n      - 雨夜\n      - A"
+    },
+    {
+      "lens": "contamination",
+      "why": "The NSFW prompt includes the SFW profile, which ends with a 二次解释 section, so a model mimicking it appends its own '二次解释' for the intimate part. SECTION_LINE onl",
+      "input": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后\n    亲密时的反差:\n      - A\n    发展亲密关系的契机:\n      - 雨夜\n      - A\n\n**二次解释（亲密部分）：**\n- 关于“A”：B",
+      "expected": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后\n    亲密时的反差:\n      - A\n    发展亲密关系的契机:\n      - 雨夜\n      - A"
+    },
+    {
+      "lens": "contamination",
+      "why": "Some models insert spaces between CJK and Latin characters ('女性 NSFW 设定'). Neither NSFW_HEADER nor NSFW_HEADER_LOOSE allows whitespace inside 'NSFW设定', so norma",
+      "input": "<沈青禾>\n  基本信息:\n    姓名: 沈青禾\n  外貌特征:\n    身高: 165cm\n  女性 NSFW 设定:\n    身体细节:\n      屁股:\n        形状: 圆\n  背景设定:\n    出身经历:\n      - 十岁拜师\n</沈青禾>",
+      "expected": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆"
+    },
+    {
+      "lens": "contamination",
+      "why": "A disclaimer written as a '•' bullet is common in plain-text answers. The same text with '-', '*' or '（' is caught by NOTE_LINE, but '•' is in LIST_ITEM and not",
+      "input": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后\n    亲密时的反差:\n      - A\n    发展亲密关系的契机:\n      - 雨夜\n      - A\n\n• 注：所有角色均已成年",
+      "expected": "  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后\n    亲密时的反差:\n      - A\n    发展亲密关系的契机:\n      - 雨夜\n      - A"
+    }
+  ]
+}

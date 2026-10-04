@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
-    DEFAULT_NSFW_FEMALE, DEFAULT_NSFW_MALE, DEFAULT_SFW_FIELDS,
+    DEFAULT_NSFW_FEMALE, DEFAULT_NSFW_MALE, DEFAULT_SFW_FIELDS, TEMPLATE_VERSION, buildNsfwPrompt, migrateTemplates, normalizeNsfw, textHash, topLevelKeys,
     buildSfwPrompt, checkOutput, cleanTitle, genderOf, guessKind, hasViolation, joinWorld, maskNames, mergeProfile, namesOfEntry, normEntry, parseNameList, parseNewName,
 } from '../src/core.js';
 
@@ -140,7 +141,8 @@ test('回归：NSFW 前后有闲话、标题在句子里、后面又抄了一遍
     // 去掉首行缩进 + 末尾闲话
     assert.match(mergeProfile(SFW, '女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n以上。'), NSFW_WANT);
     // 完全平铺（没有缩进层级）也不会被截断
-    assert.match(mergeProfile(SFW, '女性NSFW设定:\n身体细节:\n屁股:\n形状: 圆'), /\n {2}女性NSFW设定:\n {4}身体细节:\n {4}屁股:\n {4}形状: 圆\n/);
+    // 平铺写法：模板里的段落标题当段落，其余字段收进段落里
+    assert.match(mergeProfile(SFW, '女性NSFW设定:\n身体细节:\n屁股:\n形状: 圆'), /\n {2}女性NSFW设定:\n {4}身体细节:\n {6}屁股:\n {6}形状: 圆\n/);
 });
 
 test('回归：SFW 标签前后有闲话时只取标签内', () => {
@@ -171,6 +173,161 @@ test('回归：标签名与已有人物重名也算违规', () => {
     const c = checkOutput('<陈默>\n  基本信息:\n    姓名: 沈青禾', [], [['陈默']]);
     assert.equal(c.nameClash, '陈默');
     assert.equal(c.clashName, '陈默');
+});
+
+// ---- 性经验与偏好 等字段（模板版本 3） ----
+
+test('NSFW 模板含性经验、敏感带、性癖等字段，身体细节在前', () => {
+    for (const tpl of [DEFAULT_NSFW_FEMALE, DEFAULT_NSFW_MALE]) {
+        for (const k of ['性经验与偏好:', '性取向:', '性经验:', '性观念:', '敏感带:', '性癖:', '雷区与底线:', '自慰习惯:', '性幻想:', '亲密时的反差:', '发展亲密关系的契机:']) {
+            assert.ok(tpl.includes(k), k);
+        }
+        assert.ok(tpl.indexOf('身体细节:') < tpl.indexOf('性经验与偏好:'));
+        assert.match(tpl, /\n {4}性经验与偏好:\n {6}性取向:/, '与身体细节同级');
+    }
+    // 模板原样合并后层级不乱
+    const merged = mergeProfile(SFW, DEFAULT_NSFW_FEMALE);
+    assert.match(merged, /\n {2}女性NSFW设定:\n {4}身体细节:/);
+    assert.match(merged, /\n {4}性经验与偏好:\n {6}性取向:/);
+    assert.match(merged, /\n {4}亲密时的反差:\n {6}- （/);
+    assert.ok(merged.indexOf('发展亲密关系的契机') < merged.indexOf('  背景设定:'));
+});
+
+const FULL = '  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      性经验: 无\n      敏感带: 耳后\n    亲密时的反差:\n      - 会哭';
+const FULL_WANT = /\n {2}女性NSFW设定:\n {4}身体细节:\n {6}屁股:\n {8}形状: 圆\n {4}性经验与偏好:\n {6}性经验: 无\n {6}敏感带: 耳后\n {4}亲密时的反差:\n {6}- 会哭\n\n {2}背景设定:/;
+
+test('新增段落：正常、首行被 trim、整体多缩进、后面有闲话，层级都对', () => {
+    assert.match(mergeProfile(SFW, FULL), FULL_WANT);
+    assert.match(mergeProfile(SFW, FULL.trimStart()), FULL_WANT);
+    assert.match(mergeProfile(SFW, FULL.replace(/^/gm, '  ')), FULL_WANT);
+    assert.match(mergeProfile(SFW, `${FULL}\n\n希望这份设定对你有帮助！`), FULL_WANT);
+});
+
+test('新增段落：AI 把「性经验与偏好」写成与 NSFW 标题同级，也收回到标题下面', () => {
+    const sibling = '  女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n  性经验与偏好:\n    性经验: 无\n    敏感带: 耳后\n  亲密时的反差:\n    - 会哭';
+    assert.match(mergeProfile(SFW, sibling), FULL_WANT);
+    // 同级段落后面接基础资料的大标题，照样截断
+    const out = mergeProfile(SFW, `${sibling}\n  背景设定:\n    出身经历:\n      - 十岁拜师`);
+    assert.match(out, FULL_WANT);
+    assert.equal(out.split('背景设定:').length, 2);
+});
+
+// ---- 第二轮审查发现的问题（回归测试） ----
+
+test('回归：末尾带冒号的备注 / 免责声明 / 客套话不会混进资料', () => {
+    for (const trailer of [
+        '（注：该角色已满18岁，以上内容纯属虚构）', '注：以上内容纯属虚构。', '以上就是她的设定：', '*注：所有角色均为成年人*',
+        'Note: all characters are adults.', '备注：角色已成年', '注意：本设定中所有角色均已成年。', '如需调整请告诉我：', '说明：以上设定可根据剧情需要再调整。',
+    ]) {
+        for (const sep of ['\n\n', '\n']) {
+            const out = mergeProfile(SFW, `${FULL}${sep}${trailer}`);
+            assert.match(out, FULL_WANT, trailer);
+            assert.ok(!out.includes(trailer.replace(/^[（*]/, '').slice(0, 4)), trailer);
+        }
+    }
+});
+
+test('回归：标题缩进被 trim + 同级写法的段落，层级仍然一致', () => {
+    const sibling = '女性NSFW设定:\n    身体细节:\n      屁股:\n        形状: 圆\n\n  性经验与偏好:\n    性经验: 无\n    敏感带: 耳后\n\n  亲密时的反差:\n    - 会哭';
+    assert.match(mergeProfile(SFW, sibling), FULL_WANT);
+    const out = mergeProfile(SFW, `${sibling}\n  背景设定:\n    出身经历:\n      - 十岁拜师`);
+    assert.match(out, FULL_WANT);
+    assert.equal(out.split('背景设定:').length, 2);
+});
+
+test('回归：重新抄写的基础资料（markdown 标题、带值、自定义大标题）都会被截掉', () => {
+    const cases = [
+        `${FULL}\n  **背景设定**:\n    出身经历:\n      - 十岁拜师`,
+        `${FULL}\n  背景设定: （同基础资料，略）\n  关系设定: （略）`,
+    ];
+    for (const raw of cases) {
+        const out = mergeProfile(SFW, raw);
+        assert.match(out, FULL_WANT, raw);
+        assert.ok(!out.includes('略）'), raw);
+    }
+    // 用户自定义 SFW 模板里的大标题
+    const custom = SFW.replace('  背景设定:', '  能力设定:\n    剑术: 高\n\n  背景设定:');
+    const out = mergeProfile(custom, `${FULL}\n  能力设定:\n    剑术: 高`);
+    assert.equal(out.split('能力设定:').length, 2, '自定义大标题只出现一次');
+    // NSFW 块被 AI 嵌在外貌特征里：后面外貌字段不收进来
+    const nested = normalizeNsfw('  外貌特征:\n    身高: 165cm\n    女性NSFW设定:\n      身体细节:\n        形状: 圆\n    发型: 长发\n    肤色: 白');
+    assert.equal(nested, '  女性NSFW设定:\n    身体细节:\n      形状: 圆');
+});
+
+test('回归：平铺写法的散文值、* 列表、制表符缩进都不会丢', () => {
+    const flat = mergeProfile(SFW, '女性NSFW设定:\n身体细节:\n屁股: 圆\n亲密时的反差:\n平时冷淡，亲密时会撒娇。\n发展亲密关系的契机:\n- 雨夜');
+    assert.match(flat, /撒娇。\n {4}发展亲密关系的契机:\n {6}- 雨夜\n/);
+    const tabs = mergeProfile(SFW, '  女性NSFW设定:\n\t身体细节:\n\t\t屁股: 圆\n\t亲密时的反差:\n\t\t会哭得很厉害\n\t发展亲密关系的契机:\n\t\t- 雨夜');
+    assert.match(tabs, /\n {4}亲密时的反差:\n {6}会哭得很厉害\n {4}发展亲密关系的契机:\n {6}- 雨夜\n/);
+    const stars = mergeProfile(SFW, '  女性NSFW设定:\n    亲密时的反差:\n      - 会哭\n  发展亲密关系的契机:\n  * 雨夜\n  * 受伤时');
+    assert.match(stars, /\n {4}发展亲密关系的契机:\n {6}\* 雨夜\n {6}\* 受伤时\n/);
+});
+
+test('回归：规整是幂等的（界面里规整过的文字合并时不再变）', () => {
+    for (const raw of [FULL, FULL.trimStart(), '女性NSFW设定:\n身体细节:\n屁股: 圆\n亲密时的反差:\n平时冷淡。']) {
+        const once = normalizeNsfw(raw, 2, { stopKeys: topLevelKeys(SFW) });
+        assert.equal(normalizeNsfw(once, 2, { stopKeys: topLevelKeys(SFW) }), once);
+    }
+});
+
+test('对抗测试夹具：16 种 AI 输出写法都规整成同一结构，且规整结果是幂等的', () => {
+    const { sfw, cases } = JSON.parse(readFileSync(new URL('./fixtures/nsfw-breakers.json', import.meta.url), 'utf8'));
+    for (const [i, c] of cases.entries()) {
+        const out = mergeProfile(sfw, c.input);
+        const block = out.slice(out.indexOf('身高: 165cm') + 10, out.indexOf('  背景设定:')).replace(/^\s*\n/, '').trimEnd();
+        assert.equal(block, c.expected, `#${i + 1} ${c.why}`);
+        assert.equal(out.split('背景设定:').length, 2, `#${i + 1} 基础资料没有被重复`);
+        assert.equal(mergeProfile(sfw, block), out, `#${i + 1} 幂等`);
+    }
+});
+
+test('自定义 NSFW 模板的段落也能识别', () => {
+    const tpl = '  女性NSFW设定:\n    身体细节:\n      屁股:\n    口癖与叫声:\n      - （…）';
+    const raw = '女性NSFW设定:\n    身体细节:\n      屁股: 圆\n  口癖与叫声:\n    - 小声\n\n希望你喜欢！';
+    const out = mergeProfile(SFW, raw, { templates: [tpl] });
+    assert.match(out, /\n {4}口癖与叫声:\n {6}- 小声\n\n {2}背景设定:/);
+    assert.ok(!out.includes('希望'));
+});
+
+test('AI 漏写 NSFW 标题时按性别补上', () => {
+    const out = mergeProfile(SFW, '身体细节:\n      屁股:\n        形状: 圆\n    性经验与偏好:\n      敏感带: 耳后');
+    assert.match(out, /\n {2}女性NSFW设定:\n {4}身体细节:\n {6}屁股:\n {8}形状: 圆\n {4}性经验与偏好:\n {6}敏感带: 耳后\n/);
+});
+
+test('回归：NSFW 提示词只要求模板里有的字段', () => {
+    const base = { world: '', roster: [], allowed: [], sfw: SFW, request: '' };
+    const V2_FEMALE = DEFAULT_NSFW_FEMALE.slice(0, DEFAULT_NSFW_FEMALE.indexOf('\n    性经验与偏好:'));
+    const oldPrompt = buildNsfwPrompt({ ...base, fields: V2_FEMALE });
+    assert.ok(!/性癖|性经验|反差/.test(oldPrompt), '旧模板：提示词不提模板里没有的字段');
+    assert.match(buildNsfwPrompt({ ...base, fields: DEFAULT_NSFW_FEMALE }), /性癖和反差要贴合这个人/);
+});
+
+test('模板迁移：v1 全换并备份；v2 没改过的换、改过的保留；当前版本不动', () => {
+    // 新安装（settings() 已填好默认值）：不产生备份
+    const fresh = { sfwFields: DEFAULT_SFW_FIELDS, nsfwFemale: DEFAULT_NSFW_FEMALE, nsfwMale: DEFAULT_NSFW_MALE };
+    assert.equal(migrateTemplates(fresh).changed, true);
+    assert.equal(fresh.templateVersion, TEMPLATE_VERSION);
+    assert.equal(fresh.templateBackupV1, undefined);
+    // v0.1.0 用户
+    const v1 = { sfwFields: '旧SFW', nsfwFields: '旧NSFW', nsfwFemale: DEFAULT_NSFW_FEMALE, nsfwMale: DEFAULT_NSFW_MALE };
+    const r1 = migrateTemplates(v1);
+    assert.equal(r1.fromVersion, 1);
+    assert.deepEqual(v1.templateBackupV1, { sfwFields: '旧SFW', nsfwFields: '旧NSFW' });
+    assert.equal(v1.sfwFields, DEFAULT_SFW_FIELDS);
+    assert.ok(!('nsfwFields' in v1));
+    // v0.2.0 用户：女性模板没改过（v2 默认值），男性模板改过
+    const V2_FEMALE = DEFAULT_NSFW_FEMALE.slice(0, DEFAULT_NSFW_FEMALE.indexOf('\n    性经验与偏好:'));
+    const V2_MALE = DEFAULT_NSFW_MALE.slice(0, DEFAULT_NSFW_MALE.indexOf('\n    性经验与偏好:'));
+    assert.equal(textHash(V2_FEMALE), 'mrwjzd', '指纹对应 v0.2.0 的女性默认模板');
+    assert.equal(textHash(V2_MALE), 'ah8ihm', '指纹对应 v0.2.0 的男性默认模板');
+    const v2 = { templateVersion: 2, sfwFields: '我改过的SFW', nsfwFemale: V2_FEMALE, nsfwMale: `${V2_MALE}\n      我加的字段:` };
+    const r2 = migrateTemplates(v2);
+    assert.deepEqual(r2.kept, ['nsfwMale']);
+    assert.equal(v2.nsfwFemale, DEFAULT_NSFW_FEMALE);
+    assert.ok(v2.nsfwMale.includes('我加的字段'));
+    assert.equal(v2.sfwFields, '我改过的SFW', 'v2→v3 不碰 SFW 模板');
+    // 再跑一次不变
+    assert.equal(migrateTemplates(v2).changed, false);
 });
 
 test('设定资料按预算截断、常驻优先', () => {
