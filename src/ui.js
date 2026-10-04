@@ -1,8 +1,8 @@
 // 主对话框
 
 import {
-    DEFAULT_NSFW_FIELDS, DEFAULT_SFW_FIELDS, DEFAULT_SYSTEM,
-    buildNsfwPrompt, buildRepairPrompt, buildSfwPrompt, checkOutput, formatNameList, guessKind,
+    DEFAULT_NSFW_FEMALE, DEFAULT_NSFW_MALE, DEFAULT_SFW_FIELDS, DEFAULT_SYSTEM, TEMPLATE_VERSION,
+    buildNsfwPrompt, extractTagged, genderOf, mergeProfile, normalizeNsfw, buildRepairPrompt, buildSfwPrompt, checkOutput, formatNameList, guessKind,
     hasViolation, joinWorld, maskNames, namesOfEntry, parseNameList, parseNewName, shortBio, violationText,
 } from './core.js';
 import {
@@ -13,7 +13,7 @@ import {
 export const DEFAULTS = {
     apiMode: 'tavern',
     profileId: '',
-    maxTokens: 4096,
+    maxTokens: 8192,
     worldBudget: 12000,
     mask: true,
     withCard: true,
@@ -22,7 +22,8 @@ export const DEFAULTS = {
     fixTries: 2,
     mode: 'both',
     sfwFields: DEFAULT_SFW_FIELDS,
-    nsfwFields: DEFAULT_NSFW_FIELDS,
+    nsfwFemale: DEFAULT_NSFW_FEMALE,
+    nsfwMale: DEFAULT_NSFW_MALE,
     system: DEFAULT_SYSTEM,
     /** 手动改过的分类：{ [entry.uid]: 'character'|'setting'|'skip' } */
     kinds: {},
@@ -133,7 +134,7 @@ function requestText() {
     const role = $('#nf-role').value.trim();
     if (gender) bits.push(`性别：${gender}`);
     if (age) bits.push(`年龄：${age}`);
-    if (role) bits.push(`定位 / 与主角的关系：${role}`);
+    if (role) bits.push(`身份定位 / 与{{user}}的关系：${role}`);
     const free = $('#nf-request').value.trim();
     if (free) bits.push(free);
     return bits.join('\n');
@@ -190,8 +191,8 @@ function genSfw() {
         if (!state.entries.length) toast('warning', '没有读到任何世界书条目，将只根据角色卡生成');
         const prompt = buildSfwPrompt({ ...m, fields: state.s.sfwFields });
         const { text, check } = await runChecked('sfw', prompt, m);
-        state.sfw = text;
-        $('#nf-sfw').value = text;
+        state.sfw = extractTagged(text);
+        $('#nf-sfw').value = state.sfw;
         showCheck('sfw', check);
         if (state.s.mode === 'both') {
             state.nsfw = '';
@@ -202,13 +203,19 @@ function genSfw() {
     });
 }
 
+/** 按资料里的性别选 NSFW 模板；资料里没写就看表单里选的性别，都没有按女性 */
+function nsfwTemplate(sfw) {
+    const g = genderOf(sfw) || ($('#nf-gender').value === '男' ? 'male' : 'female');
+    return g === 'male' ? state.s.nsfwMale : state.s.nsfwFemale;
+}
+
 async function genNsfwInner(m = material()) {
     const sfw = $('#nf-sfw').value.trim();
     if (!sfw) throw new Error('请先生成（或填写）SFW 基础资料');
-    const prompt = buildNsfwPrompt({ ...m, sfw, fields: state.s.nsfwFields });
+    const prompt = buildNsfwPrompt({ ...m, sfw, fields: nsfwTemplate(sfw) });
     const { text, check } = await runChecked('nsfw', prompt, m);
-    state.nsfw = text;
-    $('#nf-nsfw').value = text;
+    state.nsfw = normalizeNsfw(text);
+    $('#nf-nsfw').value = state.nsfw;
     showCheck('nsfw', check);
 }
 
@@ -240,7 +247,7 @@ function fixNow(kind) {
         }
         setStatus(kind, '修正中…', 'busy');
         const text = await callLLM({ system: state.s.system, prompt: buildRepairPrompt(box.value, check), settings: state.s, signal: state.busy.signal });
-        box.value = text;
+        box.value = kind === 'nsfw' ? normalizeNsfw(text) : extractTagged(text);
         const again = checkOutput(text, m.forbidden, m.identities);
         if (kind === 'nsfw') again.nameClash = '';
         showCheck(kind, again);
@@ -253,10 +260,9 @@ function setStatus(kind, text, cls) {
     el.className = `nf-status nf-${cls}`;
 }
 
+/** 完整资料：NSFW 块插在外貌特征后面，整份用 <姓名> 标签包裹 */
 function fullText() {
-    const sfw = $('#nf-sfw').value.trim();
-    const nsfw = $('#nf-nsfw').value.trim();
-    return [sfw, nsfw && `【NSFW 资料】\n${nsfw}`].filter(Boolean).join('\n\n');
+    return mergeProfile($('#nf-sfw').value, $('#nf-nsfw').value);
 }
 
 function newName() {
@@ -267,7 +273,7 @@ function pushHistory() {
     const s = state.s;
     const sfw = $('#nf-sfw').value.trim();
     if (!sfw) return;
-    s.history.unshift({ time: Date.now(), char: currentCharacter()?.name || '', name: newName(), sfw, nsfw: $('#nf-nsfw').value.trim() });
+    s.history.unshift({ time: Date.now(), char: currentCharacter()?.name || '', name: newName(), sfw, nsfw: $('#nf-nsfw').value.trimEnd() });
     s.history = s.history.slice(0, HISTORY_MAX);
     saveSettings();
     renderHistory();
@@ -333,7 +339,7 @@ function renderSettings() {
     const profiles = connectionProfiles();
     $('#nf-profile').innerHTML = `<option value="">（选择配置档）</option>${profiles.map((p) => `<option value="${esc(p.id)}" ${p.id === s.profileId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}`;
     $('#nf-profile-row').style.display = s.apiMode === 'profile' ? '' : 'none';
-    for (const k of ['maxTokens', 'worldBudget', 'fixTries', 'sfwFields', 'nsfwFields', 'system']) $(`[data-set="${k}"]`).value = s[k];
+    for (const k of ['maxTokens', 'worldBudget', 'fixTries', 'sfwFields', 'nsfwFemale', 'nsfwMale', 'system']) $(`[data-set="${k}"]`).value = s[k];
     for (const k of ['mask', 'withCard', 'withBio', 'autoFix']) $(`[data-opt="${k}"]`).checked = !!s[k];
     $('#nf-mode').value = s.mode;
 }
@@ -360,8 +366,10 @@ const TEMPLATE = `
             <div class="nf-row"><label>最大回复长度</label><input type="number" data-set="maxTokens" min="256" step="256"><small class="nf-muted">仅配置档模式；当前连接沿用酒馆里的设置</small></div>
             <div class="nf-row"><label>设定资料字数上限</label><input type="number" data-set="worldBudget" min="1000" step="1000"></div>
             <div class="nf-row"><label>自动修正次数</label><input type="number" data-set="fixTries" min="0" max="5"></div>
-            <label class="nf-block">SFW 字段模板<textarea data-set="sfwFields" rows="8"></textarea></label>
-            <label class="nf-block">NSFW 字段模板<textarea data-set="nsfwFields" rows="8"></textarea></label>
+            <div class="nf-muted">模板里（…）是给 AI 的填写说明，&lt;…&gt; 是让 AI 自己起名的小标题。NSFW 块会插在「外貌特征」后面，按资料里的性别选用男 / 女模板。</div>
+            <label class="nf-block">SFW 资料模板<textarea data-set="sfwFields" rows="12"></textarea></label>
+            <label class="nf-block">NSFW 模板（女性）<textarea data-set="nsfwFemale" rows="8"></textarea></label>
+            <label class="nf-block">NSFW 模板（男性）<textarea data-set="nsfwMale" rows="8"></textarea></label>
             <label class="nf-block">系统提示词<textarea data-set="system" rows="8"></textarea></label>
             <div class="nf-row"><button class="menu_button" data-act="reset-prompts">恢复默认模板与提示词</button></div>
         </section>
@@ -395,7 +403,7 @@ const TEMPLATE = `
             <div class="nf-grid">
                 <label>性别<select id="nf-gender"><option value="">不限</option><option>女</option><option>男</option><option>双性</option><option>其他</option></select></label>
                 <label>年龄<input id="nf-age" placeholder="如 24、二十出头（须成年）"></label>
-                <label class="nf-span2">定位 / 与主角的关系<input id="nf-role" placeholder="如：{{char}} 新来的同事；敌对势力的密探"></label>
+                <label class="nf-span2">身份定位 / 与{{user}}的关系<input id="nf-role" placeholder="如：同批坠机的幸存者，临时求生同伴；敌对势力的密探"></label>
             </div>
             <textarea id="nf-request" rows="3" placeholder="其他要求：性格、外貌、经历、风格……"></textarea>
             <div class="nf-opts">
@@ -418,7 +426,7 @@ const TEMPLATE = `
                 <div class="nf-out-head"><b>SFW 资料</b>
                     <span><button class="menu_button" data-act="gen" title="重新生成">🎲</button><button class="menu_button" data-act="fix-sfw">修正</button></span></div>
                 <div class="nf-status" id="nf-sfw-status"></div>
-                <textarea id="nf-sfw" rows="14"></textarea>
+                <textarea id="nf-sfw" rows="22"></textarea>
             </div>
             <div class="nf-out">
                 <div class="nf-out-head"><b>NSFW 资料</b>
@@ -448,7 +456,7 @@ function bind() {
             case 'close': return close();
             case 'toggle-settings': $('#nf-settings').hidden = !$('#nf-settings').hidden; return;
             case 'reset-prompts':
-                Object.assign(s, { sfwFields: DEFAULT_SFW_FIELDS, nsfwFields: DEFAULT_NSFW_FIELDS, system: DEFAULT_SYSTEM });
+                Object.assign(s, { sfwFields: DEFAULT_SFW_FIELDS, nsfwFemale: DEFAULT_NSFW_FEMALE, nsfwMale: DEFAULT_NSFW_MALE, system: DEFAULT_SYSTEM });
                 saveSettings();
                 renderSettings();
                 return;
@@ -553,6 +561,20 @@ function onKey(e) {
     if (e.key === 'Escape' && state.root && !document.querySelector('.popup:not([closing])')) close();
 }
 
+/** 旧版本保存的模板结构不同，换成新的默认模板 */
+function migrate(s) {
+    if ((s.templateVersion || 1) >= TEMPLATE_VERSION) return;
+    // 旧模板留一份备份（扩展设置里的 newface.templateBackupV1），万一用户改过还能找回
+    if (s.sfwFields || s.nsfwFields) s.templateBackupV1 = { sfwFields: s.sfwFields, nsfwFields: s.nsfwFields };
+    if (s.maxTokens === 4096) s.maxTokens = DEFAULTS.maxTokens; // 新格式资料更长，旧默认值容易截断
+    s.sfwFields = DEFAULT_SFW_FIELDS;
+    s.nsfwFemale = DEFAULT_NSFW_FEMALE;
+    s.nsfwMale = DEFAULT_NSFW_MALE;
+    delete s.nsfwFields;
+    s.templateVersion = TEMPLATE_VERSION;
+    saveSettings();
+}
+
 export async function open() {
     const ch = currentCharacter();
     if (!ch) {
@@ -560,6 +582,7 @@ export async function open() {
         return;
     }
     state.s = settings(DEFAULTS);
+    migrate(state.s);
     if (state.root) close();
     const root = document.createElement('div');
     root.className = 'nf-overlay';

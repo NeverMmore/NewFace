@@ -111,8 +111,9 @@ export function cardText(maxChars = 3000) {
 
 // ---------------- LLM ----------------
 
+/** 去掉思考过程；只去首尾空行和末尾空白，不动第一行的缩进（YAML 缩进层级要靠它） */
 function stripThinking(t) {
-    return String(t || '').replace(/<(think|thinking|reasoning)>[\s\S]*?<\/\1>/gi, '').trim();
+    return String(t || '').replace(/<(think|thinking|reasoning)>[\s\S]*?<\/\1>/gi, '').replace(/^(?:[ \t]*\r?\n)+/, '').trimEnd();
 }
 
 /**

@@ -43,9 +43,9 @@ window.SillyTavern = { getContext: () => ({
         const n = window.__calls.length;
         await new Promise((r) => setTimeout(r, 100));
         // 第一次故意用已有人物，测试自动修正
-        if (n === 1) return '姓名：苏瑶\n性别：女\n年龄：20\n与林晚的关系：师徒';
-        if (prompt[1].content.includes('补写成人向')) return '性取向：异性恋\n敏感带：耳后';
-        return '姓名：沈青禾\n性别：女\n年龄：24\n身份：散修药师\n与 {{char}} 的关系：救命恩人';
+        if (n === 1) return '<苏瑶>\n  基本信息:\n    姓名: 苏瑶\n    年龄: 20岁\n    性别: 女\n  背景设定:\n    师承:\n      - 林晚的徒弟\n</苏瑶>';
+        if (prompt[1].content.includes('补写成人向')) return '```yaml\n女性NSFW设定:\n  身体细节:\n    屁股:\n      形状: 蜜桃臀\n```';
+        return '<沈青禾>\n  基本信息:\n    姓名: 沈青禾\n    年龄: 24岁\n    性别: 女\n    身份: 散修药师\n    与{{user}}关系: 救命恩人\n\n  外貌特征:\n    身高: 165cm\n\n  背景设定:\n    出身经历:\n      - 十岁拜师\n</沈青禾>';
     },
 }) };
 </script>
