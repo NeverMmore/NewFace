@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NewFace 测试台</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link rel="stylesheet" href="../../style.css">
+<style>
+    body { background: #222; color: #ddd; font-family: sans-serif; --SmartThemeBodyColor: #dcdcd2; }
+    .menu_button { display: inline-flex; gap: 4px; align-items: center; padding: 4px 10px; border: 1px solid #555; border-radius: 6px; background: #333; color: inherit; cursor: pointer; }
+    input, select, textarea { background: #1a1a1a; color: #ddd; border: 1px solid #444; border-radius: 4px; padding: 4px; }
+</style>
+</head>
+<body>
+<div id="extensionsMenu"></div>
+<div id="extensions_settings"></div>
+<script>
+// 酒馆上下文的最小模拟：测试用，只实现插件用到的接口
+const books = {
+    '仙途': { entries: {
+        0: { uid: 0, comment: '世界观', key: ['九州'], content: '九州大陆，灵气复苏。青云宗与血煞门对立，宗主林晚坐镇青云峰。', constant: true },
+        1: { uid: 1, comment: '角色 - 林晚', key: ['林晚', '林宗主'], content: '姓名：林晚\n性别：女\n年龄：300\n身份：青云宗宗主' },
+        2: { uid: 2, comment: '苏瑶', key: ['苏瑶', '瑶儿'], content: '性别：女\n年龄：19\n外貌：白衣\n身份：青云宗大师姐' },
+        3: { uid: 3, comment: '血煞门', key: ['血煞门'], content: '魔道门派，门主厉无涯。' },
+        4: { uid: 4, comment: '厉无涯', key: ['厉无涯'], content: '身份：血煞门门主\n性格：阴狠\n外貌：黑袍' },
+    } },
+};
+window.__calls = [];
+window.SillyTavern = { getContext: () => ({
+    characterId: '0', groupId: null, name1: '你', name2: '陈默',
+    characters: [{ name: '陈默', avatar: 'chenmo.png', description: '青云宗外门弟子', data: { extensions: { world: '仙途' } } }],
+    chatMetadata: {},
+    extensionSettings: window.__ext || (window.__ext = {}),
+    saveSettingsDebounced() {},
+    getRequestHeaders: () => ({ 'Content-Type': 'application/json' }),
+    getWorldInfoNames: async () => Object.keys(books).concat(['其他书']),
+    loadWorldInfo: async (n) => structuredClone(books[n] || { entries: {} }),
+    saveWorldInfo: async (n, d) => { books[n] = d; },
+    getCharacterCardFields: () => ({ description: '青云宗外门弟子，木讷老实。' }),
+    generateRaw: async ({ prompt }) => {
+        window.__calls.push(prompt);
+        const n = window.__calls.length;
+        await new Promise((r) => setTimeout(r, 100));
+        // 第一次故意用已有人物，测试自动修正
+        if (n === 1) return '姓名：苏瑶\n性别：女\n年龄：20\n与林晚的关系：师徒';
+        if (prompt[1].content.includes('补写成人向')) return '性取向：异性恋\n敏感带：耳后';
+        return '姓名：沈青禾\n性别：女\n年龄：24\n身份：散修药师\n与 {{char}} 的关系：救命恩人';
+    },
+}) };
+</script>
+<script type="module" src="../../index.js"></script>
+</body>
+</html>
